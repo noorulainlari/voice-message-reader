@@ -6,7 +6,7 @@ struct TranscribeAudioIntent: AppIntent {
     static var title: LocalizedStringResource = "Transcribe Audio"
     static var description = IntentDescription("Turns a voice message, audio or video file into text.")
 
-    @Parameter(title: "Audio File", supportedContentTypes: [.audio, .movie, .audiovisualContent, .data])
+    @Parameter(title: "Audio File", supportedTypeIdentifiers: ["public.audio", "public.movie", "public.audiovisual-content", "public.data"])
     var file: IntentFile
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
