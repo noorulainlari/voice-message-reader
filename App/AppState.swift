@@ -8,6 +8,7 @@ final class AppState: ObservableObject {
     @Published var openTranscriptID: UUID?
     @Published var showPaywall = false
     @Published var showRecorder = false
+    @Published var showTutorial = false
 
     // Processing
     @Published var processing = false
