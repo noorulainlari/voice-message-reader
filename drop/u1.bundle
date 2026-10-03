@@ -1,0 +1,1126 @@
+@@@FILE App/StoreManager.swift
+import StoreKit
+
+@MainActor
+final class StoreManager: ObservableObject {
+    @Published var products: [Product] = []
+    @Published var loading = false
+    @Published var purchasing = false
+    @Published var errorMessage: String?
+
+    func load() async {
+        guard products.isEmpty else { return }
+        loading = true
+        defer { loading = false }
+        for attempt in 0..<3 {
+            if let list = try? await Product.products(for: ProductIDs.all), !list.isEmpty {
+                products = list.sorted { order($0.id) < order($1.id) }
+                return
+            }
+            try? await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000)
+        }
+    }
+
+    private func order(_ id: String) -> Int {
+        switch id {
+        case ProductIDs.yearly: return 0
+        case ProductIDs.monthly: return 1
+        default: return 2
+        }
+    }
+
+    func product(_ id: String) -> Product? { products.first { $0.id == id } }
+
+    /// Returns true when the purchase unlocked Pro.
+    func purchase(_ product: Product) async -> Bool {
+        purchasing = true
+        defer { purchasing = false }
+        do {
+            let result = try await product.purchase()
+            switch result {
+            case .success(let verification):
+                if case .verified(let transaction) = verification {
+                    await transaction.finish()
+                }
+                return await ProStatus.refresh()
+            case .pending:
+                errorMessage = "Your purchase is pending approval."
+                return false
+            case .userCancelled:
+                return false
+            @unknown default:
+                return false
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+    }
+
+    func restore() async -> Bool {
+        try? await AppStore.sync()
+        let pro = await ProStatus.refresh()
+        if !pro { errorMessage = "No active subscription was found for this Apple ID." }
+        return pro
+    }
+}
+
+extension Product {
+    var periodText: String {
+        guard let p = subscription?.subscriptionPeriod else { return "" }
+        switch p.unit {
+        case .day: return p.value == 7 ? "week" : "\(p.value) days"
+        case .week: return "week"
+        case .month: return p.value == 1 ? "month" : "\(p.value) months"
+        case .year: return "year"
+        @unknown default: return ""
+        }
+    }
+
+    var weeklyPriceText: String? {
+        guard let p = subscription?.subscriptionPeriod else { return nil }
+        let weeks: Decimal
+        switch p.unit {
+        case .year: weeks = 52
+        case .month: weeks = Decimal(p.value) * 52 / 12
+        default: return nil
+        }
+        let perWeek = price / weeks
+        return perWeek.formatted(priceFormatStyle) + "/week"
+    }
+
+    var freeTrialText: String? {
+        guard let offer = subscription?.introductoryOffer, offer.paymentMode == .freeTrial else { return nil }
+        let unit: String
+        switch offer.period.unit {
+        case .day: unit = offer.period.value == 1 ? "day" : "days"
+        case .week: unit = offer.period.value == 1 ? "week" : "weeks"
+        case .month: unit = offer.period.value == 1 ? "month" : "months"
+        case .year: unit = "year"
+        @unknown default: unit = "days"
+        }
+        return "\(offer.period.value)-\(unit == "days" ? "day" : unit) free trial"
+    }
+}
+@@@FILE App/Views/PaywallView.swift
+import SwiftUI
+import StoreKit
+
+enum Links {
+    static let site = "https://noorulainlari.github.io/voicereader-site"
+    static let terms = URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!
+    static let supportEmail = "relnoorain@gmail.com"
+}
+
+struct PaywallView: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+    @StateObject private var store = StoreManager()
+    @State private var selected = ProductIDs.yearly
+    @State private var showClose = false
+    @State private var showPrivacy = false
+    @State private var pulse = false
+
+    private let fallback: [(id: String, title: String, price: String, period: String)] = [
+        (ProductIDs.yearly, "Yearly", "$29.99", "year"),
+        (ProductIDs.monthly, "Monthly", "$5.99", "month"),
+        (ProductIDs.weekly, "Weekly", "$2.99", "week")
+    ]
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ScrollView {
+                VStack(spacing: 22) {
+                    header
+                    features
+                    plans
+                    cta
+                    footer
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 30)
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+
+            if showClose {
+                Button { dismiss() } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.9))
+                        .frame(width: 32, height: 32)
+                        .background(.black.opacity(0.25))
+                        .clipShape(Circle())
+                }
+                .padding(.top, 14)
+                .padding(.trailing, 16)
+                .transition(.opacity)
+            }
+        }
+        .task {
+            await store.load()
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            withAnimation { showClose = true }
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { pulse = true }
+        }
+        .alert("Notice", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
+            Button("OK", role: .cancel) { }
+        } message: { Text(store.errorMessage ?? "") }
+        .sheet(isPresented: $showPrivacy) { NavigationStack { PrivacyPolicyView() } }
+        .interactiveDismissDisabled(!showClose)
+    }
+
+    // MARK: Sections
+
+    private var header: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle().fill(.white.opacity(0.15)).frame(width: 130, height: 130)
+                    .scaleEffect(pulse ? 1.08 : 0.95)
+                Circle().fill(.white.opacity(0.2)).frame(width: 96, height: 96)
+                Image(systemName: "text.bubble.fill")
+                    .font(.system(size: 46))
+                    .foregroundStyle(.white)
+                Image(systemName: "crown.fill")
+                    .font(.system(size: 22))
+                    .foregroundStyle(.yellow)
+                    .offset(x: 34, y: -36)
+            }
+            Text("Voice Reader Pro")
+                .font(.system(.largeTitle, design: .rounded).bold())
+            Text("Read every voice message in seconds.\nNo limits.")
+                .font(.subheadline)
+                .multilineTextAlignment(.center)
+                .opacity(0.9)
+        }
+        .foregroundStyle(.white)
+        .padding(.top, 50)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity)
+        .background(
+            Theme.gradient
+                .clipShape(RoundedRectangle(cornerRadius: 36, style: .continuous))
+                .padding(.horizontal, -20)
+                .ignoresSafeArea(edges: .top)
+        )
+    }
+
+    private var features: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            feature("infinity", "Unlimited transcriptions", "WhatsApp, Telegram, any audio or video")
+            feature("sparkles", "AI summary & smart replies", "Get the point of long voice notes")
+            feature("character.bubble", "Translate to any language", "Understand messages from anyone")
+            feature("mic.fill", "Live transcription", "Record and see text as you speak")
+            feature("arrow.down.doc.fill", "Export PDF, TXT & subtitles", "Save and share your text")
+        }
+        .card()
+    }
+
+    private func feature(_ icon: String, _ title: String, _ subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 36, height: 36)
+                .background(Theme.gradient)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.semibold))
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.teal)
+        }
+    }
+
+    private var plans: some View {
+        VStack(spacing: 10) {
+            ForEach(fallback, id: \.id) { item in
+                planRow(item.id, title: item.title, fallbackPrice: item.price, fallbackPeriod: item.period)
+            }
+        }
+    }
+
+    private func planRow(_ id: String, title: String, fallbackPrice: String, fallbackPeriod: String) -> some View {
+        let product = store.product(id)
+        let isSel = selected == id
+        let price = product?.displayPrice ?? fallbackPrice
+        let period = product?.periodText ?? fallbackPeriod
+        let trial = product?.freeTrialText ?? (id == ProductIDs.yearly ? "3-day free trial" : nil)
+
+        return Button { withAnimation(.spring(duration: 0.25)) { selected = id } } label: {
+            HStack(spacing: 14) {
+                Image(systemName: isSel ? "checkmark.circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(isSel ? Theme.teal : Color(.tertiaryLabel))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.headline)
+                    if let trial {
+                        Text(trial).font(.caption.weight(.semibold)).foregroundStyle(Theme.teal)
+                    } else {
+                        Text("Cancel anytime").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 3) {
+                    Text("\(price)/\(period)").font(.subheadline.weight(.bold))
+                    if let weekly = product?.weeklyPriceText {
+                        Text(weekly).font(.caption).foregroundStyle(.secondary)
+                    } else if id == ProductIDs.yearly {
+                        Text("$0.58/week").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .foregroundStyle(.primary)
+            .padding(16)
+            .background(Color(.secondarySystemGroupedBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(isSel ? Theme.teal : Color.clear, lineWidth: 2.5)
+            )
+            .overlay(alignment: .topTrailing) {
+                if id == ProductIDs.yearly {
+                    Text("BEST VALUE · SAVE 80%")
+                        .font(.caption2.weight(.heavy))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.orange)
+                        .foregroundStyle(.white)
+                        .clipShape(Capsule())
+                        .offset(x: -14, y: -11)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var cta: some View {
+        let product = store.product(selected)
+        let hasTrial = product?.freeTrialText != nil || (product == nil && selected == ProductIDs.yearly)
+        return VStack(spacing: 10) {
+            Button {
+                Task {
+                    guard let product else {
+                        store.errorMessage = "The App Store isn't available right now. Please check your connection and try again."
+                        await store.load()
+                        return
+                    }
+                    if await store.purchase(product) {
+                        await state.refreshPro()
+                        dismiss()
+                    }
+                }
+            } label: {
+                HStack {
+                    if store.purchasing { ProgressView().tint(.white) }
+                    Text(hasTrial ? "Start Free Trial" : "Continue")
+                }
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .scaleEffect(pulse ? 1.02 : 1)
+            .disabled(store.purchasing)
+
+            Text(hasTrial
+                 ? "3 days free, then \(product?.displayPrice ?? "$29.99")/year. Cancel anytime."
+                 : "Auto-renews. Cancel anytime in Settings.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Label("No commitment · Cancel anytime", systemImage: "checkmark.shield.fill")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(Theme.teal)
+        }
+    }
+
+    private var footer: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 18) {
+                Button("Restore") {
+                    Task {
+                        if await store.restore() {
+                            await state.refreshPro()
+                            dismiss()
+                        }
+                    }
+                }
+                Button("Terms") { UIApplication.shared.open(Links.terms) }
+                Button("Privacy") { showPrivacy = true }
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+
+            Text("Payment is charged to your Apple ID at confirmation. The subscription renews automatically unless cancelled at least 24 hours before the end of the current period. Manage or cancel in your App Store account settings.")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        }
+    }
+}
+@@@FILE App/Views/InfoViews.swift
+import SwiftUI
+
+struct PrivacyPolicyView: View {
+    @Environment(\.dismiss) private var dismiss
+
+    private let sections: [(String, String)] = [
+        ("Your messages stay yours", "Voice Reader has no servers, no accounts and no tracking. We never collect, store, sell or see your audio, your text or any personal data."),
+        ("Audio and transcriptions", "Audio you share or record is turned into text by Apple's speech recognition. When your language supports it, everything happens on your iPhone. For some languages Apple may process the audio on its servers to complete the transcription, under Apple's Privacy Policy. The developer never receives it."),
+        ("Stored on your device", "Transcriptions, summaries, translations and audio are saved only inside the app on your iPhone. Delete a transcription or the app to remove them."),
+        ("Summaries and translation", "Summaries and suggested replies use Apple Intelligence on supported iPhones, or a built-in on-device method. Translation uses Apple's Translation framework."),
+        ("Purchases", "Subscriptions are handled by Apple through the App Store. We never receive your payment details."),
+        ("Analytics and ads", "The app contains no analytics, advertising or tracking SDKs."),
+        ("Children", "Voice Reader is not directed to children under 13 and does not knowingly collect information from them."),
+        ("Contact", "Questions about privacy? Email \(Links.supportEmail).")
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 12) {
+                    Image(systemName: "lock.shield.fill").font(.largeTitle).foregroundStyle(Theme.teal)
+                    VStack(alignment: .leading) {
+                        Text("Privacy Policy").font(.title2.bold())
+                        Text("Last updated October 3, 2026").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                ForEach(sections, id: \.0) { s in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(s.0).font(.headline)
+                        Text(s.1).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card()
+                }
+            }
+            .padding()
+        }
+        .background(Color(.systemGroupedBackground))
+        .navigationTitle("Privacy")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+    }
+}
+
+struct SupportView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
+    @State private var showTutorial = false
+    @State private var expanded: String?
+
+    private let faqs: [(String, String)] = [
+        ("How do I transcribe a WhatsApp voice message?", "Press and hold the voice message, tap Forward, tap the Share button, then choose Transcribe (or the Voice Reader icon)."),
+        ("I don't see Voice Reader in the share sheet", "Scroll to the bottom of the share sheet and tap Edit Actions, then add Transcribe to your Favorites. For the app row, scroll right, tap More and enable Voice Reader."),
+        ("The text is wrong or empty", "Check that the audio language is correct. Open the transcription, tap ••• and choose Transcribe again in another language."),
+        ("Does it work offline?", "Yes, for languages your iPhone supports on-device. Other languages need an internet connection."),
+        ("How do I cancel my subscription?", "Open iPhone Settings › your name › Subscriptions › Voice Reader and tap Cancel. You keep Pro until the end of the period."),
+        ("I paid but Pro isn't active", "Go to Settings in the app and tap Restore purchases, using the same Apple ID you bought with.")
+    ]
+
+    var body: some View {
+        List {
+            Section {
+                Button { showTutorial = true } label: {
+                    Label("Watch the step-by-step tutorial", systemImage: "play.rectangle.fill")
+                }
+            }
+            Section("Frequently asked questions") {
+                ForEach(faqs, id: \.0) { faq in
+                    DisclosureGroup(isExpanded: Binding(
+                        get: { expanded == faq.0 },
+                        set: { expanded = $0 ? faq.0 : nil })) {
+                        Text(faq.1).font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 4)
+                    } label: {
+                        Text(faq.0).font(.subheadline.weight(.medium))
+                    }
+                }
+            }
+            Section("Still need help?") {
+                Button {
+                    let subject = "Voice Reader Support".addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""
+                    if let url = URL(string: "mailto:\(Links.supportEmail)?subject=\(subject)") { openURL(url) }
+                } label: {
+                    Label("Email support", systemImage: "envelope.fill")
+                }
+                Text("We usually reply within 48 hours.").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Help & Support")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        .sheet(isPresented: $showTutorial) { TutorialView() }
+    }
+}
+@@@FILE App/Views/TutorialView.swift
+import SwiftUI
+
+/// Animated step-by-step guide showing how to send a voice message to Voice Reader.
+struct TutorialView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var app: ChatStyle = .whatsapp
+    @State private var page = 0
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("App", selection: $app) {
+                    ForEach(ChatStyle.allCases) { Text($0.name).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.top, 6)
+                .onChange(of: app) { _, _ in withAnimation { page = 0 } }
+
+                TabView(selection: $page) {
+                    ForEach(0..<5, id: \.self) { i in
+                        TutorialStep(app: app, step: i, active: page == i).tag(i)
+                    }
+                }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+
+                HStack(spacing: 8) {
+                    ForEach(0..<5, id: \.self) { i in
+                        Capsule()
+                            .fill(i == page ? AnyShapeStyle(Theme.gradient) : AnyShapeStyle(Color(.systemGray4)))
+                            .frame(width: i == page ? 26 : 8, height: 8)
+                    }
+                }
+                .animation(.spring(duration: 0.3), value: page)
+                .padding(.bottom, 14)
+
+                Button(page < 4 ? "Next" : "Got it!") {
+                    if page < 4 { withAnimation { page += 1 } } else { dismiss() }
+                }
+                .buttonStyle(PrimaryButtonStyle())
+                .padding(.horizontal, 24)
+                .padding(.bottom, 16)
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("How it works")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } } }
+        }
+    }
+}
+
+enum ChatStyle: String, CaseIterable, Identifiable {
+    case whatsapp, telegram
+    var id: String { rawValue }
+    var name: String { self == .whatsapp ? "WhatsApp" : "Telegram" }
+    var outgoing: Color { self == .whatsapp ? Color(red: 0.85, green: 0.98, blue: 0.82) : Color(red: 0.88, green: 0.95, blue: 1.0) }
+    var wallpaper: Color { self == .whatsapp ? Color(red: 0.95, green: 0.93, blue: 0.89) : Color(red: 0.82, green: 0.89, blue: 0.80) }
+    var accent: Color { self == .whatsapp ? Color(red: 0.05, green: 0.6, blue: 0.35) : Color(red: 0.16, green: 0.55, blue: 0.9) }
+    var menuAction: String { self == .whatsapp ? "Forward" : "Select" }
+
+    func title(_ step: Int) -> String {
+        switch step {
+        case 0: return "Press & hold the voice message"
+        case 1: return "Tap \u{201C}\(menuAction)\u{201D}"
+        case 2: return "Tap the Share button"
+        case 3: return "Choose \u{201C}Transcribe\u{201D}"
+        default: return "Done! Read it instantly"
+        }
+    }
+
+    func subtitle(_ step: Int) -> String {
+        switch step {
+        case 0: return "Open the chat in \(name) and long-press any voice note."
+        case 1: return self == .whatsapp ? "A menu appears. Tap Forward." : "A menu appears. Tap Select."
+        case 2: return "Tap the share icon at the bottom of the screen."
+        case 3: return "Scroll down and tap Transcribe, or tap the Voice Reader icon."
+        default: return "The text appears right away. Copy it, translate it or get a summary."
+        }
+    }
+}
+
+struct TutorialStep: View {
+    let app: ChatStyle
+    let step: Int
+    let active: Bool
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(app.title(step))
+                .font(.title3.bold())
+                .multilineTextAlignment(.center)
+            Text(app.subtitle(step))
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+
+            PhoneFrame {
+                switch step {
+                case 0: ChatMock(app: app, selecting: false)
+                case 1: MenuMock(app: app)
+                case 2: ChatMock(app: app, selecting: true)
+                case 3: ShareSheetMock()
+                default: ResultMock()
+                }
+            }
+            .overlay { if step < 4 { TapPointer(position: pointerPosition, active: active) } }
+            .padding(.top, 8)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 18)
+    }
+
+    /// Relative (0…1) position of the tap pointer inside the phone.
+    private var pointerPosition: CGPoint {
+        switch step {
+        case 0: return CGPoint(x: 0.42, y: 0.78)
+        case 1: return CGPoint(x: 0.45, y: 0.66)
+        case 2: return CGPoint(x: 0.88, y: 0.93)
+        default: return CGPoint(x: 0.6, y: 0.83)
+        }
+    }
+}
+
+// MARK: - Phone + pointer
+
+struct PhoneFrame<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .environment(\.colorScheme, .light)
+            .frame(width: 230, height: 440)
+            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
+            .overlay(alignment: .top) {
+                Capsule().fill(.black).frame(width: 74, height: 20).padding(.top, 8)
+            }
+            .padding(8)
+            .background(
+                RoundedRectangle(cornerRadius: 38, style: .continuous)
+                    .fill(Color(white: 0.12))
+                    .shadow(color: .black.opacity(0.25), radius: 18, y: 10)
+            )
+    }
+}
+
+struct TapPointer: View {
+    let position: CGPoint
+    let active: Bool
+    @State private var tap = false
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                Circle()
+                    .stroke(Theme.teal, lineWidth: 3)
+                    .frame(width: 44, height: 44)
+                    .scaleEffect(tap ? 1.4 : 0.6)
+                    .opacity(tap ? 0 : 0.9)
+                Image(systemName: "hand.point.up.left.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.6), radius: 3)
+                    .offset(x: 16, y: tap ? 20 : 26)
+                    .scaleEffect(tap ? 0.92 : 1)
+            }
+            .position(x: geo.size.width * position.x, y: geo.size.height * position.y)
+        }
+        .allowsHitTesting(false)
+        .onAppear { animate() }
+        .onChange(of: active) { _, _ in animate() }
+    }
+
+    private func animate() {
+        tap = false
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: false)) { tap = true }
+    }
+}
+
+// MARK: - Mock screens
+
+private struct VoiceBubble: View {
+    var outgoing: Bool
+    var app: ChatStyle
+    var duration: String
+    var highlighted = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "play.fill").font(.system(size: 11)).foregroundStyle(.gray)
+            HStack(spacing: 2) {
+                ForEach(0..<16, id: \.self) { i in
+                    Capsule().fill(outgoing ? app.accent.opacity(0.6) : Color.gray.opacity(0.6))
+                        .frame(width: 2, height: CGFloat([6, 10, 14, 8, 12, 5, 9, 13, 7, 11, 6, 10, 8, 12, 5, 9][i]))
+                }
+            }
+            Text(duration).font(.system(size: 8)).foregroundStyle(.gray)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .background(outgoing ? app.outgoing : .white)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(highlighted ? Theme.teal : .clear, lineWidth: 2)
+        )
+        .frame(maxWidth: .infinity, alignment: outgoing ? .trailing : .leading)
+    }
+}
+
+private struct ChatHeader: View {
+    var app: ChatStyle
+    var selecting: Bool
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle().fill(app.accent.opacity(0.35)).frame(width: 24, height: 24)
+                .overlay(Text("S").font(.caption2.bold()).foregroundStyle(app.accent))
+            Text("Sara").font(.system(size: 12, weight: .semibold))
+            Spacer()
+            if selecting { Text("Cancel").font(.system(size: 11, weight: .medium)).foregroundStyle(app.accent) }
+            else { Image(systemName: "phone").font(.system(size: 11)).foregroundStyle(app.accent) }
+        }
+        .padding(.horizontal, 12).padding(.top, 34).padding(.bottom, 8)
+        .background(.white)
+    }
+}
+
+struct ChatMock: View {
+    let app: ChatStyle
+    let selecting: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            ChatHeader(app: app, selecting: selecting)
+            VStack(spacing: 8) {
+                row(out: false, "0:12")
+                row(out: true, "0:08")
+                row(out: false, "0:21")
+                row(out: true, "0:05")
+                row(out: false, "0:34", highlighted: true)
+            }
+            .padding(10)
+            .frame(maxHeight: .infinity, alignment: .bottom)
+            .background(app.wallpaper)
+            HStack {
+                if selecting {
+                    Image(systemName: "arrowshape.turn.up.right").foregroundStyle(app.accent)
+                    Spacer()
+                    Text("1 Selected").font(.system(size: 11, weight: .medium))
+                    Spacer()
+                    Image(systemName: "square.and.arrow.up").foregroundStyle(app.accent)
+                } else {
+                    Image(systemName: "plus").foregroundStyle(app.accent)
+                    Capsule().stroke(Color(.systemGray4)).frame(height: 22)
+                    Image(systemName: "mic.fill").foregroundStyle(app.accent)
+                }
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 12).padding(.vertical, 10)
+            .padding(.bottom, 10)
+            .background(.white)
+        }
+    }
+
+    private func row(out: Bool, _ d: String, highlighted: Bool = false) -> some View {
+        HStack(spacing: 6) {
+            if selecting {
+                Image(systemName: highlighted ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(highlighted ? app.accent : .gray)
+            }
+            VoiceBubble(outgoing: out, app: app, duration: d, highlighted: highlighted && !selecting)
+        }
+    }
+}
+
+struct MenuMock: View {
+    let app: ChatStyle
+
+    var body: some View {
+        ZStack {
+            ChatMock(app: app, selecting: false).blur(radius: 6).overlay(Color.black.opacity(0.15))
+            VStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    ForEach(["👍", "❤️", "😂", "😮", "🙏"], id: \.self) { Text($0).font(.system(size: 15)) }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .background(.white).clipShape(Capsule())
+                VoiceBubble(outgoing: false, app: app, duration: "0:34").frame(width: 170)
+                VStack(spacing: 0) {
+                    menuRow("Reply", "arrowshape.turn.up.left")
+                    menuRow(app.menuAction, app == .whatsapp ? "arrowshape.turn.up.right" : "checkmark.circle", highlight: true)
+                    menuRow("Copy", "doc.on.doc")
+                    menuRow("Delete", "trash", destructive: true)
+                }
+                .background(.white.opacity(0.95))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .frame(width: 170)
+            }
+            .padding(.top, 60)
+        }
+    }
+
+    private func menuRow(_ t: String, _ icon: String, highlight: Bool = false, destructive: Bool = false) -> some View {
+        HStack {
+            Text(t).font(.system(size: 12, weight: highlight ? .semibold : .regular))
+            Spacer()
+            Image(systemName: icon).font(.system(size: 11))
+        }
+        .foregroundStyle(destructive ? .red : .primary)
+        .padding(.horizontal, 12).padding(.vertical, 9)
+        .background(highlight ? Theme.teal.opacity(0.18) : .clear)
+    }
+}
+
+struct ShareSheetMock: View {
+    var body: some View {
+        VStack(spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "waveform").font(.system(size: 12)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28).background(Color.blue.opacity(0.8))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Voice message.opus").font(.system(size: 11, weight: .semibold))
+                    Text("Audio · 54 KB").font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.gray)
+            }
+            .padding(.top, 36)
+
+            HStack(spacing: 10) {
+                appIcon("AirDrop", Color.blue, "dot.radiowaves.up.forward")
+                appIcon("Messages", Color.green, "message.fill")
+                appIcon("Mail", Color.blue, "envelope.fill")
+                VStack(spacing: 4) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Theme.gradient)
+                        Image(systemName: "text.bubble.fill").foregroundStyle(.white).font(.system(size: 16))
+                    }
+                    .frame(width: 40, height: 40)
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.teal, lineWidth: 2).padding(-3))
+                    Text("Voice Reader").font(.system(size: 8, weight: .semibold))
+                }
+            }
+
+            VStack(spacing: 0) {
+                actionRow("Copy", "doc.on.doc")
+                actionRow("Save to Files", "folder")
+                actionRow("Transcribe", "text.bubble", highlight: true)
+            }
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .background(Color(.systemGray6))
+    }
+
+    private func appIcon(_ name: String, _ color: Color, _ icon: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: icon).foregroundStyle(.white).font(.system(size: 16))
+                .frame(width: 40, height: 40).background(color)
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            Text(name).font(.system(size: 8))
+        }
+    }
+
+    private func actionRow(_ t: String, _ icon: String, highlight: Bool = false) -> some View {
+        HStack {
+            Text(t).font(.system(size: 12, weight: highlight ? .semibold : .regular))
+            Spacer()
+            Image(systemName: icon).font(.system(size: 12))
+        }
+        .padding(.horizontal, 12).padding(.vertical, 11)
+        .background(highlight ? Theme.teal.opacity(0.18) : .clear)
+    }
+}
+
+struct ResultMock: View {
+    @State private var reveal = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Done").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.teal)
+                Spacer()
+                Label("English", systemImage: "globe").font(.system(size: 10)).foregroundStyle(Theme.teal)
+            }
+            .padding(.top, 36)
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.circle.fill").foregroundStyle(Theme.teal).font(.system(size: 20))
+                    Capsule().fill(Color(.systemGray5)).frame(height: 4)
+                    Text("1.5x").font(.system(size: 9, weight: .bold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Theme.teal.opacity(0.15)).clipShape(Capsule())
+                }
+                Text("Hi! I'm running 10 minutes late. Can you order me a coffee? See you soon!")
+                    .font(.system(size: 12))
+                    .opacity(reveal ? 1 : 0)
+                    .offset(y: reveal ? 0 : 6)
+            }
+            .padding(10)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Summary", systemImage: "sparkles").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.teal)
+                Text("• Running 10 min late\n• Wants you to order a coffee").font(.system(size: 10))
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.white)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .opacity(reveal ? 1 : 0)
+
+            HStack(spacing: 6) {
+                pill("Copy", "doc.on.doc")
+                pill("Translate", "character.bubble")
+                pill("Share", "square.and.arrow.up")
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .background(Color(.systemGray6))
+        .onAppear { withAnimation(.easeOut(duration: 0.8).delay(0.3)) { reveal = true } }
+    }
+
+    private func pill(_ t: String, _ icon: String) -> some View {
+        Label(t, systemImage: icon)
+            .font(.system(size: 9, weight: .medium))
+            .padding(.horizontal, 8).padding(.vertical, 6)
+            .background(.white).clipShape(Capsule())
+    }
+}
+@@@FILE App/Views/HomeView.swift
+import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
+
+struct MovieFile: Transferable {
+    let url: URL
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(contentType: .movie) { SentTransferredFile($0.url) } importing: { received in
+            let dest = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString + "." + received.file.pathExtension)
+            try FileManager.default.copyItem(at: received.file, to: dest)
+            return MovieFile(url: dest)
+        }
+    }
+}
+
+struct HomeView: View {
+    @EnvironmentObject var state: AppState
+    @EnvironmentObject var history: HistoryStore
+    @State private var path: [UUID] = []
+    @State private var showImporter = false
+    @State private var photoItem: PhotosPickerItem?
+    @State private var showGuide = false
+
+    static let importTypes: [UTType] = [
+        .audio, .movie, .audiovisualContent, .mpeg4Audio, .mp3, .wav,
+        UTType(importedAs: "org.xiph.opus"), UTType(importedAs: "org.xiph.ogg-audio")
+    ]
+
+    var body: some View {
+        NavigationStack(path: $path) {
+            ScrollView {
+                VStack(spacing: 18) {
+                    if !state.isPro { proBanner }
+                    hero
+                    actions
+                    quickApps
+                    guideCard
+                    recent
+                }
+                .padding()
+            }
+            .background(Color(.systemGroupedBackground))
+            .navigationTitle("Voice Reader")
+            .navigationDestination(for: UUID.self) { id in TranscriptDetailView(id: id) }
+            .fileImporter(isPresented: $showImporter, allowedContentTypes: Self.importTypes) { result in
+                if case .success(let url) = result { state.handle(url: url, history: history) }
+            }
+            .onChange(of: photoItem) { _, item in
+                guard let item else { return }
+                Task {
+                    if let movie = try? await item.loadTransferable(type: MovieFile.self) {
+                        state.transcribe(movie.url, source: "Video", history: history)
+                    }
+                    photoItem = nil
+                }
+            }
+            .onChange(of: state.openTranscriptID) { _, id in
+                guard let id else { return }
+                path = [id]
+                state.openTranscriptID = nil
+            }
+            .sheet(isPresented: $showGuide) { TutorialView() }
+            .toolbar {
+                if !state.isPro {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { state.showPaywall = true } label: {
+                            Label("PRO", systemImage: "crown.fill")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption.weight(.heavy))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Theme.gradient)
+                                .foregroundStyle(.white)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var hero: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "text.bubble.fill").font(.title)
+                Spacer()
+            }
+            Text("Read voice messages\ninstead of listening")
+                .font(.title2.bold())
+            Text("Works with WhatsApp, Telegram, Signal, Voice Memos and any audio or video.")
+                .font(.subheadline).opacity(0.9)
+        }
+        .foregroundStyle(.white)
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.gradient)
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var actions: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Text("Audio language").font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                LanguageButton(localeID: $state.localeID)
+            }
+            HStack(spacing: 12) {
+                tile("Import File", "folder.fill") { showImporter = true }
+                PhotosPicker(selection: $photoItem, matching: .videos) {
+                    tileLabel("From Video", "video.fill")
+                }
+            }
+            HStack(spacing: 12) {
+                tile("Record Live", "mic.fill") { state.showRecorder = true }
+                tile("How to Share", "square.and.arrow.up.fill") { showGuide = true }
+            }
+        }
+    }
+
+    private func tile(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) { tileLabel(title, icon) }
+    }
+
+    private func tileLabel(_ title: String, _ icon: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: icon).font(.title2).foregroundStyle(Theme.teal)
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 74, alignment: .leading)
+        .card()
+    }
+
+    private var guideCard: some View {
+        Button { showGuide = true } label: {
+            HStack(spacing: 14) {
+                Image(systemName: "bubble.left.and.text.bubble.right.fill")
+                    .font(.title2).foregroundStyle(Theme.teal)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("From WhatsApp in 3 taps").font(.subheadline.bold()).foregroundStyle(.primary)
+                    Text("Hold the voice message › Forward › Share › Transcribe")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .card()
+        }
+    }
+
+    private var proBanner: some View {
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Free transcriptions: \(state.freeLeft)/\(AppGroup.freeLimit)")
+                    .font(.subheadline.weight(.semibold))
+                ProgressView(value: Double(state.freeLeft), total: Double(AppGroup.freeLimit))
+                    .tint(Theme.teal)
+            }
+            Button { state.showPaywall = true } label: {
+                VStack(spacing: 0) {
+                    Image(systemName: "crown.fill").font(.caption)
+                    Text("Upgrade").font(.subheadline.bold())
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Theme.gradient).foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .card()
+    }
+
+    private var quickApps: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("QUICK ACTIONS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                quickApp("Open WhatsApp", "message.fill", Color(red: 0.15, green: 0.73, blue: 0.4), "whatsapp://")
+                quickApp("Open Telegram", "paperplane.fill", Color(red: 0.16, green: 0.6, blue: 0.9), "tg://")
+            }
+        }
+    }
+
+    private func quickApp(_ title: String, _ icon: String, _ color: Color, _ scheme: String) -> some View {
+        Button {
+            if let url = URL(string: scheme) {
+                UIApplication.shared.open(url) { ok in if !ok { showGuide = true } }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28).background(color)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer(minLength: 0)
+            }
+            .card()
+        }
+    }
+
+    @ViewBuilder
+    private var recent: some View {
+        if !history.items.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Text("Recent").font(.headline)
+                    Spacer()
+                    Button("See all") { state.tab = 1 }.font(.subheadline)
+                }
+                ForEach(history.items.prefix(5)) { t in
+                    NavigationLink(value: t.id) { TranscriptRow(t: t).card() }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+struct TranscriptRow: View {
+    let t: Transcript
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text(t.title).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Spacer()
+                if t.isFavorite { Image(systemName: "star.fill").foregroundStyle(.yellow).font(.caption) }
+            }
+            Text(t.text).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            HStack(spacing: 10) {
+                Label(t.duration.clockString, systemImage: "waveform")
+                Text(t.languageName)
+                Spacer()
+                Text(t.createdAt, style: .relative)
+            }
+            .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
