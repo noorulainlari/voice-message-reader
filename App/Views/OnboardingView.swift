@@ -30,7 +30,7 @@ struct OnboardingView: View {
                         _ = await Transcriber.requestAuthorization()
                         state.onboarded = true
                         try? await Task.sleep(nanoseconds: 600_000_000)
-                        if !state.isPro { state.showPaywall = true }
+                        state.showTutorial = true
                     }
                 }
             }
