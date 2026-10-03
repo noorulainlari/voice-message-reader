@@ -31,10 +31,11 @@ struct HomeView: View {
         NavigationStack(path: $path) {
             ScrollView {
                 VStack(spacing: 18) {
+                    if !state.isPro { proBanner }
                     hero
                     actions
+                    quickApps
                     guideCard
-                    if !state.isPro { proBanner }
                     recent
                 }
                 .padding()
@@ -59,7 +60,22 @@ struct HomeView: View {
                 path = [id]
                 state.openTranscriptID = nil
             }
-            .sheet(isPresented: $showGuide) { GuideView() }
+            .sheet(isPresented: $showGuide) { TutorialView() }
+            .toolbar {
+                if !state.isPro {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { state.showPaywall = true } label: {
+                            Label("PRO", systemImage: "crown.fill")
+                                .labelStyle(.titleAndIcon)
+                                .font(.caption.weight(.heavy))
+                                .padding(.horizontal, 10).padding(.vertical, 5)
+                                .background(Theme.gradient)
+                                .foregroundStyle(.white)
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -121,7 +137,7 @@ struct HomeView: View {
                     .font(.title2).foregroundStyle(Theme.teal)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("From WhatsApp in 3 taps").font(.subheadline.bold()).foregroundStyle(.primary)
-                    Text("Hold the voice message › Forward › Share › Voice Reader")
+                    Text("Hold the voice message › Forward › Share › Transcribe")
                         .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.leading)
                 }
                 Spacer()
@@ -132,15 +148,48 @@ struct HomeView: View {
     }
 
     private var proBanner: some View {
-        Button { state.showPaywall = true } label: {
-            HStack {
-                Image(systemName: "crown.fill").foregroundStyle(.yellow)
-                Text("\(state.freeLeft) free transcriptions left")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                Spacer()
-                Text("Go Pro").font(.subheadline.bold())
-                    .padding(.horizontal, 12).padding(.vertical, 6)
-                    .background(Theme.gradient).foregroundStyle(.white).clipShape(Capsule())
+        HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Free transcriptions: \(state.freeLeft)/\(AppGroup.freeLimit)")
+                    .font(.subheadline.weight(.semibold))
+                ProgressView(value: Double(state.freeLeft), total: Double(AppGroup.freeLimit))
+                    .tint(Theme.teal)
+            }
+            Button { state.showPaywall = true } label: {
+                VStack(spacing: 0) {
+                    Image(systemName: "crown.fill").font(.caption)
+                    Text("Upgrade").font(.subheadline.bold())
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                .background(Theme.gradient).foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+        }
+        .card()
+    }
+
+    private var quickApps: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("QUICK ACTIONS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            HStack(spacing: 12) {
+                quickApp("Open WhatsApp", "message.fill", Color(red: 0.15, green: 0.73, blue: 0.4), "whatsapp://")
+                quickApp("Open Telegram", "paperplane.fill", Color(red: 0.16, green: 0.6, blue: 0.9), "tg://")
+            }
+        }
+    }
+
+    private func quickApp(_ title: String, _ icon: String, _ color: Color, _ scheme: String) -> some View {
+        Button {
+            if let url = URL(string: scheme) {
+                UIApplication.shared.open(url) { ok in if !ok { showGuide = true } }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: icon).font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 28, height: 28).background(color)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Spacer(minLength: 0)
             }
             .card()
         }
