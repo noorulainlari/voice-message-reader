@@ -118,7 +118,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.noorulain.voicereader.share
-        APPLICATION_EXTENSION_API_ONLY: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
 
   VoiceReaderWidget:
     type: app-extension
