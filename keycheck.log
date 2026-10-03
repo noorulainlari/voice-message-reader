@@ -1,0 +1,17 @@
+key id length: 10, issuer length: 36, body chars: 200, p8 lines:        6
+Apple API check: 200
+development certs: 5, created via API: 5
+revoked old CI cert 2027-10-03T11:42:44.000+00:00
+screenshot exists for 6818781896
+screenshot exists for 6818782064
+screenshot exists for 6818782035
+/Applications/Xcode_26.0.1.app
+/Applications/Xcode_26.0.app
+/Applications/Xcode_26.1.1.app
+/Applications/Xcode_26.1.app
+/Applications/Xcode_26.2.0.app
+/Applications/Xcode_26.2.app
+/Applications/Xcode_26.3.0.app
+/Applications/Xcode_26.3.app
+Trying /Applications/Xcode_26.0.app
+** ARCHIVE SUCCEEDED **
