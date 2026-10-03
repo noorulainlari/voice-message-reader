@@ -129,17 +129,18 @@ targets:
     type: app-extension
     platform: iOS
     sources:
-      - ShareExtension
+      - path: ShareExtension
+        excludes: [Info.plist, "*.entitlements"]
       - Shared
     dependencies:
       - package: SwiftOGG
     entitlements:
-      path: ShareExtension/ActionExtension.entitlements
+      path: ActionExtension/ActionExtension.entitlements
       properties:
         com.apple.security.application-groups:
           - group.com.noorulain.voicereader
     info:
-      path: ShareExtension/ActionInfo.plist
+      path: ActionExtension/Info.plist
       properties:
         CFBundleDisplayName: Transcribe
         CFBundleShortVersionString: $(MARKETING_VERSION)
