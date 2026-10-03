@@ -88,6 +88,11 @@ jobs:
         if: env.ASC_KEY_ID != ''
         run: python3 ci/clean_certs.py | tee -a keycheck.log
 
+      - name: Subscription review screenshots
+        if: env.ASC_KEY_ID != ''
+        continue-on-error: true
+        run: python3 ci/review_shots.py | tee -a keycheck.log
+
       - name: Archive
         if: env.ASC_KEY_ID != ''
         run: |
