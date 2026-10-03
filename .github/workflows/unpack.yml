@@ -1,0 +1,30 @@
+name: Unpack code drop
+
+on:
+  push:
+    branches: [main]
+    paths: ['drop/*.tar.gz']
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  unpack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract and commit
+        run: |
+          set -e
+          for f in drop/*.tar.gz; do tar -xzf "$f"; done
+          git rm -q drop/*.tar.gz
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Unpack code drop" || echo "nothing to commit"
+          git push
+      - name: Start build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build.yml --ref main
