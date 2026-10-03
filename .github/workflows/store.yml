@@ -1,0 +1,45 @@
+name: App Store listing
+
+on:
+  workflow_dispatch:
+
+jobs:
+  listing:
+    runs-on: ubuntu-latest
+    env:
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq fonts-inter >/dev/null
+          pip install --quiet playwright pyjwt cryptography
+          python -m playwright install --with-deps chromium >/dev/null
+      - name: API key
+        run: |
+          KID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')
+          IID=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')
+          echo "ASC_KEY_ID=$KID" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID=$IID" >> "$GITHUB_ENV"
+          mkdir -p ~/private_keys
+          BODY=$(printf '%s' "$ASC_KEY_P8" | grep -v -- '-----' | tr -d '[:space:]')
+          { echo "-----BEGIN PRIVATE KEY-----"; printf '%s' "$BODY" | fold -w 64; echo; echo "-----END PRIVATE KEY-----"; } > ~/private_keys/AuthKey_$KID.p8
+      - name: Render screenshots
+        run: python ci/store/render.py store_shots
+      - name: Upload listing
+        run: python ci/store/upload.py store_shots 2>&1 | tee store.log
+      - name: Publish log
+        if: always()
+        run: |
+          mkdir -p /tmp/sl && cp store.log /tmp/sl/ 2>/dev/null || true
+          cd /tmp/sl && git init -q && git checkout -q -b store-logs && git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm log || true
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" store-logs
+      - name: Keep screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: store-shots
+          path: store_shots/*.png
