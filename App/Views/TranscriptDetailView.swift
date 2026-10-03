@@ -51,7 +51,10 @@ struct TranscriptDetailView: View {
             }
             .padding()
         }
-        .onAppear { player.load(t.audioURL) }
+        .onAppear {
+            player.load(t.audioURL)
+            if UserDefaults.standard.bool(forKey: "autoplay"), player.available, !player.isPlaying { player.toggle() }
+        }
         .toolbar { toolbar(t) }
         .sheet(item: $exportURL) { url in ShareSheet(items: [url]) }
         .sheet(isPresented: $showTranslate) {
