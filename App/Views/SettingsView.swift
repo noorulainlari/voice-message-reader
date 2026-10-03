@@ -1,5 +1,6 @@
 import SwiftUI
 import StoreKit
+import Speech
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -8,6 +9,8 @@ struct SettingsView: View {
     @Environment(\.openURL) private var openURL
     @AppStorage("lockEnabled") private var lockEnabled = false
     @AppStorage("autoCopy") private var autoCopy = false
+    @AppStorage("autoplay") private var autoplay = false
+    @State private var speechOK = SFSpeechRecognizer.authorizationStatus() == .authorized
     @State private var showGuide = false
     @State private var restoring = false
 
@@ -49,6 +52,21 @@ struct SettingsView: View {
                         LanguageButton(localeID: $state.localeID)
                     }
                     Toggle("Copy text automatically", isOn: $autoCopy)
+                    Toggle("Autoplay audio", isOn: $autoplay)
+                    HStack {
+                        Label("Speech Recognition", systemImage: "mic.fill")
+                        Spacer()
+                        if speechOK {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        } else {
+                            Button("Allow") {
+                                Task {
+                                    speechOK = await Transcriber.requestAuthorization()
+                                    if !speechOK, let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                                }
+                            }
+                        }
+                    }
                     LabeledContent("AI summaries", value: AIHelper.appleIntelligenceAvailable ? "Apple Intelligence" : "Built-in")
                 }
 
@@ -66,13 +84,15 @@ struct SettingsView: View {
                 }
 
                 Section("Help") {
-                    Button("How to share from WhatsApp & Telegram") { showGuide = true }
-                    Button("Contact support") {
-                        openURL(URL(string: "mailto:\(Links.supportEmail)?subject=Voice%20Reader%20Support")!)
+                    Button { showGuide = true } label: { Label("How to use (tutorial)", systemImage: "play.rectangle.fill") }
+                    NavigationLink { SupportView() } label: { Label("Help & Support", systemImage: "questionmark.circle.fill") }
+                    NavigationLink { PrivacyPolicyView() } label: { Label("Privacy Policy", systemImage: "lock.shield.fill") }
+                    Link(destination: Links.terms) { Label("Terms of Use", systemImage: "doc.text.fill") }
+                    Button { requestReview() } label: { Label("Rate Voice Reader", systemImage: "star.fill") }
+                    ShareLink(item: URL(string: "https://apps.apple.com/app/id6818769380")!,
+                              message: Text("Read your WhatsApp voice messages as text with Voice Reader")) {
+                        Label("Tell a Friend", systemImage: "hand.thumbsup.fill")
                     }
-                    Button("Rate Voice Reader") { requestReview() }
-                    Link("Privacy Policy", destination: Links.privacy)
-                    Link("Terms of Use", destination: Links.terms)
                 }
 
                 Section {
@@ -82,7 +102,7 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .sheet(isPresented: $showGuide) { GuideView() }
+            .sheet(isPresented: $showGuide) { TutorialView() }
         }
     }
 }
