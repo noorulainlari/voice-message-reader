@@ -31,6 +31,7 @@ targets:
       - Shared
     dependencies:
       - target: ShareExtension
+      - target: ActionExtension
       - target: VoiceReaderWidget
       - package: SwiftOGG
     entitlements:
@@ -76,6 +77,7 @@ targets:
             LSHandlerRank: Alternate
             LSItemContentTypes: [public.audio, org.xiph.opus, org.xiph.ogg-audio, public.movie]
         LSSupportsOpeningDocumentsInPlace: false
+        LSApplicationQueriesSchemes: [whatsapp, tg]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.noorulain.voicereader
@@ -120,6 +122,47 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.noorulain.voicereader.share
+        TARGETED_DEVICE_FAMILY: "1"
+        APPLICATION_EXTENSION_API_ONLY: YES
+
+  ActionExtension:
+    type: app-extension
+    platform: iOS
+    sources:
+      - ShareExtension
+      - Shared
+    dependencies:
+      - package: SwiftOGG
+    entitlements:
+      path: ShareExtension/ActionExtension.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.noorulain.voicereader
+    info:
+      path: ShareExtension/ActionInfo.plist
+      properties:
+        CFBundleDisplayName: Transcribe
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSSpeechRecognitionUsageDescription: Voice Reader uses speech recognition to turn your voice messages and audio files into text.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.ui-services
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).ShareViewController
+          NSExtensionAttributes:
+            NSExtensionServiceRoleType: NSExtensionServiceRoleTypeViewer
+            NSExtensionActivationRule: >-
+              SUBQUERY (extensionItems, $extensionItem, SUBQUERY ($extensionItem.attachments, $attachment,
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.audio" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.audiovisual-content" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.movie" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.xiph.opus" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "org.xiph.ogg-audio" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.file-url" ||
+              ANY $attachment.registeredTypeIdentifiers UTI-CONFORMS-TO "public.data"
+              ).@count >= 1).@count >= 1
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.noorulain.voicereader.action
         TARGETED_DEVICE_FAMILY: "1"
         APPLICATION_EXTENSION_API_ONLY: YES
 
