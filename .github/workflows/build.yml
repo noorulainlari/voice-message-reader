@@ -87,14 +87,27 @@ jobs:
       - name: Archive
         if: env.ASC_KEY_ID != ''
         run: |
-          set -o pipefail
-          xcodebuild archive -project VoiceReader.xcodeproj -scheme VoiceReader \
-            -destination 'generic/platform=iOS' -configuration Release \
-            -archivePath "$RUNNER_TEMP/VoiceReader.xcarchive" \
-            -allowProvisioningUpdates \
-            -authenticationKeyPath ~/private_keys/AuthKey_${ASC_KEY_ID}.p8 \
-            -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
-            CURRENT_PROJECT_VERSION=${{ github.run_number }} 2>&1 | tee build.log | grep -E "error:|ARCHIVE (SUCCEEDED|FAILED)" || true
+          ls -d /Applications/Xcode_26*.app | tee -a keycheck.log
+          for XC in $(ls -d /Applications/Xcode_26*.app | sort -V); do
+            sudo xcode-select -s "$XC"
+            echo "Trying $XC" | tee -a keycheck.log
+            xcodebuild archive -project VoiceReader.xcodeproj -scheme VoiceReader \
+              -destination 'generic/platform=iOS' -configuration Release \
+              -archivePath "$RUNNER_TEMP/VoiceReader.xcarchive" \
+              -allowProvisioningUpdates \
+              -authenticationKeyPath "$HOME/private_keys/AuthKey_${ASC_KEY_ID}.p8" \
+              -authenticationKeyID "$ASC_KEY_ID" -authenticationKeyIssuerID "$ASC_ISSUER_ID" \
+              CURRENT_PROJECT_VERSION=${{ github.run_number }} > build.log 2>&1 || true
+            grep -E "ARCHIVE (SUCCEEDED|FAILED)" build.log | tee -a keycheck.log
+            grep -q "ARCHIVE SUCCEEDED" build.log && break
+            grep -q "Authentication failed\|Communication with Apple failed" build.log || break
+          done
+          if ! grep -q "ARCHIVE SUCCEEDED" build.log; then
+            xcodebuild build -project VoiceReader.xcodeproj -scheme VoiceReader \
+              -destination 'generic/platform=iOS' -configuration Release \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO > compile.log 2>&1 || true
+            grep -E "BUILD (SUCCEEDED|FAILED)" compile.log | tee -a keycheck.log
+          fi
           grep -q "ARCHIVE SUCCEEDED" build.log
 
       - name: Upload to TestFlight
