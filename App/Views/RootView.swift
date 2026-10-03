@@ -19,7 +19,12 @@ struct RootView: View {
         .overlay {
             if state.processing { ProcessingOverlay() }
         }
-        .sheet(isPresented: $state.showPaywall) { PaywallView() }
+        .fullScreenCover(isPresented: $state.showPaywall) { PaywallView() }
+        .sheet(isPresented: $state.showTutorial, onDismiss: {
+            if !state.isPro {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { state.showPaywall = true }
+            }
+        }) { TutorialView() }
         .fullScreenCover(isPresented: $state.showRecorder) { RecordView() }
         .alert("Couldn't transcribe", isPresented: Binding(
             get: { state.processingError != nil },
