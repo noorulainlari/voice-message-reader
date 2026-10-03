@@ -59,8 +59,14 @@ jobs:
       - name: Install API key
         if: env.ASC_KEY_ID != ''
         run: |
+          KID=$(printf '%s' "$ASC_KEY_ID" | tr -d '[:space:]')
+          IID=$(printf '%s' "$ASC_ISSUER_ID" | tr -d '[:space:]')
+          echo "ASC_KEY_ID=$KID" >> "$GITHUB_ENV"
+          echo "ASC_ISSUER_ID=$IID" >> "$GITHUB_ENV"
           mkdir -p ~/private_keys
-          printf '%s' "$ASC_KEY_P8" > ~/private_keys/AuthKey_${ASC_KEY_ID}.p8
+          printf '%s\n' "$ASC_KEY_P8" | tr -d '\r' > ~/private_keys/AuthKey_$KID.p8
+          echo "key id length: ${#KID}, issuer length: ${#IID}, p8 lines: $(wc -l < ~/private_keys/AuthKey_$KID.p8)" | tee keycheck.log
+          head -1 ~/private_keys/AuthKey_$KID.p8 | grep -q "BEGIN PRIVATE KEY" && echo "p8 header ok" | tee -a keycheck.log || echo "p8 header MISSING" | tee -a keycheck.log
 
       - name: Archive
         if: env.ASC_KEY_ID != ''
