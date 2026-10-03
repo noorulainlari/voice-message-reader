@@ -20,18 +20,19 @@ jobs:
           shopt -s nullglob
           for f in drop/*.b64; do base64 -d "$f" > "${f%.b64}"; done
           for f in drop/*.tar.gz; do tar -xzf "$f"; done
-          for f in drop/*.bundle; do python3 -c "
-import sys,os
-cur=None;buf=[]
-def flush():
-    if cur:
-        os.makedirs(os.path.dirname(cur) or '.',exist_ok=True); open(cur,'w').write(''.join(buf))
-for line in open(sys.argv[1]):
-    if line.startswith('@@@FILE '):
-        flush(); cur=line[8:].strip(); buf=[]
-    else: buf.append(line)
-flush()
-" "$f"; done
+          for f in drop/*.bundle; do python3 - "$f" <<'PY'
+          import sys,os
+          cur=None;buf=[]
+          def flush():
+              if cur:
+                  os.makedirs(os.path.dirname(cur) or '.',exist_ok=True); open(cur,'w').write(''.join(buf))
+          for line in open(sys.argv[1]):
+              if line.startswith('@@@FILE '):
+                  flush(); cur=line[8:].strip(); buf=[]
+              else: buf.append(line)
+          flush()
+          PY
+          done
           git rm -q -r drop
           rm -rf drop
           git config user.name "github-actions[bot]"
