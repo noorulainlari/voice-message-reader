@@ -3,7 +3,7 @@ name: Unpack code drop
 on:
   push:
     branches: [main]
-    paths: ['drop/*.tar.gz']
+    paths: ['drop/**']
 
 permissions:
   contents: write
@@ -17,8 +17,11 @@ jobs:
       - name: Extract and commit
         run: |
           set -e
+          shopt -s nullglob
+          for f in drop/*.b64; do base64 -d "$f" > "${f%.b64}"; done
           for f in drop/*.tar.gz; do tar -xzf "$f"; done
-          git rm -q drop/*.tar.gz
+          git rm -q -r drop
+          rm -rf drop
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
