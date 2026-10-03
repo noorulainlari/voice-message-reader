@@ -68,6 +68,22 @@ jobs:
           { echo "-----BEGIN PRIVATE KEY-----"; printf '%s' "$BODY" | fold -w 64; echo; echo "-----END PRIVATE KEY-----"; } > ~/private_keys/AuthKey_$KID.p8
           echo "key id length: ${#KID}, issuer length: ${#IID}, body chars: ${#BODY}, p8 lines: $(wc -l < ~/private_keys/AuthKey_$KID.p8)" | tee keycheck.log
 
+      - name: Check API key with Apple
+        if: env.ASC_KEY_ID != ''
+        run: |
+          python3 -m pip install --quiet --break-system-packages pyjwt cryptography || python3 -m pip install --quiet pyjwt cryptography
+          python3 - <<'PY' | tee -a keycheck.log
+          import jwt, time, os, urllib.request, urllib.error
+          kid=os.environ["ASC_KEY_ID"]; iss=os.environ["ASC_ISSUER_ID"]
+          key=open(os.path.expanduser(f"~/private_keys/AuthKey_{kid}.p8")).read()
+          tok=jwt.encode({"iss":iss,"iat":int(time.time()),"exp":int(time.time())+600,"aud":"appstoreconnect-v1"},key,algorithm="ES256",headers={"kid":kid,"typ":"JWT"})
+          req=urllib.request.Request("https://api.appstoreconnect.apple.com/v1/apps?limit=1",headers={"Authorization":"Bearer "+tok})
+          try:
+              r=urllib.request.urlopen(req); print("Apple API check:", r.status)
+          except urllib.error.HTTPError as e:
+              print("Apple API check:", e.code, e.read().decode()[:300])
+          PY
+
       - name: Archive
         if: env.ASC_KEY_ID != ''
         run: |
