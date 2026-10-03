@@ -6,6 +6,9 @@ on:
     branches: [main]
     paths-ignore: ['drop/**', '**.md']
 
+permissions:
+  contents: write
+
 concurrency:
   group: build
   cancel-in-progress: true
@@ -88,6 +91,17 @@ jobs:
         run: |
           grep -E "error:|warning: .*(unavailable|deprecated)" build.log | sort -u | head -80 || true
           tail -40 export.log 2>/dev/null || true
+
+      - name: Publish logs to ci-logs branch
+        if: always()
+        run: |
+          mkdir -p /tmp/ci
+          cp *.log /tmp/ci/ 2>/dev/null || true
+          grep -hE "error:|warning: .*(unavailable|deprecated)" *.log 2>/dev/null | sort -u | head -300 > /tmp/ci/errors.txt || true
+          echo "run ${{ github.run_number }} ${{ job.status }} $(date -u)" > /tmp/ci/status.txt
+          cd /tmp/ci && git init -q && git checkout -q -b ci-logs && git add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "logs ${{ github.run_number }}"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" ci-logs
 
       - name: Save logs
         if: always()
