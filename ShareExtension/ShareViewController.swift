@@ -91,11 +91,16 @@ final class ShareViewController: UIViewController {
         }
     }
 
+    /// Opens the main app. `UIApplication.open` is not callable from extensions at compile time,
+    /// so it is invoked through the Objective-C runtime on the app instance found in the responder chain.
     private func openHostApp(_ url: URL) {
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let r = responder {
-            if let app = r as? UIApplication {
-                app.open(url, options: [:], completionHandler: nil)
+            if r.responds(to: selector), let imp = r.method(for: selector) {
+                typealias OpenFn = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+                let open = unsafeBitCast(imp, to: OpenFn.self)
+                open(r, selector, url as NSURL, NSDictionary(), nil)
                 break
             }
             responder = r.next
